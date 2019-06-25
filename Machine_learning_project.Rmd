@@ -1,0 +1,407 @@
+---
+title: "Peer-graded Assignment: Prediction Assignment Writeup"
+output: html_document
+---
+
+## Introduction
+
+The goal of this project is to predict the manner in which the patients did the exercise. This is the "classe" variable in the training set. We may use any of the other variables to predict with.
+
+### Load the libraries
+
+```{r, echo= FALSE}
+
+library(caret)
+library( elasticnet)
+library(Metrics)
+library(e1071)
+library(tidyverse)
+library(purrr)
+library(ggplot2)
+library(dplyr)
+library(randomForest)
+library(tibble)
+library(doMC)
+
+```
+
+### Use the directory ".data' as working directory
+
+```{r}
+
+if (!file.exists("./data")){
+  dir.create("./data")
+}
+
+```
+
+### Download the file and put the file in the "data" folder
+
+```{r}
+
+URL_trainingData<- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+URL_testingData<- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+download.file(URL_trainingData,destfile="./data/trainingData.cvs",method="auto")
+download.file(URL_testingData,destfile="./data/testingData.cvs",method="auto")
+
+```
+
+### Read the data
+
+```{r}
+
+training <- read.csv("./data/trainingData.cvs", header = TRUE)
+testing <- read.csv("./data/testingData.cvs", header = TRUE)
+
+``` 
+
+
+## Exploratory analysis
+
+### Type of variables
+
+After load the data, we should check if the variables have been stored with the type of value that corresponds to it
+
+
+```{r, results='hide'}
+
+str(training)
+
+```
+
+### Number of missing data per variable
+
+```{r}
+
+map_dbl(training, .f = function(x){sum(is.na(x))})
+
+```
+
+#### Importance of the variables
+
+### Clean all columns that have missing values
+
+We use the Ramdn forest strategy which is a widely used strategy to determine the importance of variables
+
+
+```{r}
+
+training <- training %>% 
+            select(roll_belt, pitch_belt, yaw_belt, total_accel_belt, gyros_belt_x,
+gyros_belt_y, gyros_belt_z, accel_belt_x, accel_belt_y, accel_belt_z, magnet_belt_x,
+magnet_belt_y, magnet_belt_z, roll_arm, pitch_arm, yaw_arm, total_accel_arm, gyros_arm_x,
+gyros_arm_y, gyros_arm_z, accel_arm_x, accel_arm_y, accel_arm_z, magnet_arm_x, 
+magnet_arm_y, magnet_arm_z, roll_dumbbell, pitch_dumbbell, yaw_dumbbell, total_accel_dumbbell, 
+gyros_dumbbell_x, gyros_dumbbell_y, gyros_dumbbell_z, accel_dumbbell_x, accel_dumbbell_y, 
+accel_dumbbell_z, magnet_dumbbell_x, magnet_dumbbell_y, magnet_dumbbell_z, roll_forearm,
+pitch_forearm, yaw_forearm, total_accel_forearm, gyros_forearm_x, gyros_forearm_y, 
+gyros_forearm_z, accel_forearm_x, accel_forearm_y, accel_forearm_z, magnet_forearm_x, 
+magnet_forearm_y, magnet_forearm_z, classe) %>% 
+
+na.omit()
+
+
+training <- map_if(.x = training, .p = is.character, .f = as.factor) %>%
+            as.data.frame()
+
+
+modelo_randforest <- randomForest(formula = classe ~ . ,
+                                  data = na.omit(training),
+                                  mtry = 5,
+                                  importance = TRUE, 
+                                  ntree = 1000) 
+importancia <- as.data.frame(modelo_randforest$importance)
+importancia <- rownames_to_column(importancia,var = "variable")
+
+```
+
+##### Graph to evaluate the accuracy reduction 
+
+```{r}
+
+ggplot(data = importancia, aes(x = reorder(variable, MeanDecreaseAccuracy),
+                               y = MeanDecreaseAccuracy,
+                               fill = MeanDecreaseAccuracy)) +
+      labs(x = "variable", title = "Reducción de Accuracy") +
+      geom_col() +
+      coord_flip() +
+      theme_bw() +
+      theme(legend.position = "bottom")
+
+```
+
+##### Graph to evaluate the purity reduction
+
+```{r}
+
+ggplot(data = importancia, aes(x = reorder(variable, MeanDecreaseGini),
+                               y = MeanDecreaseGini,
+                               fill = MeanDecreaseGini)) +
+      labs(x = "variable", title = "Reducción de pureza (Gini)") +
+      geom_col() +
+      coord_flip() +
+      theme_bw() +
+      theme(legend.position = "bottom")
+```
+
+Both analyzes suggest that the roll_belt and yaw_belt variables have a high influence on classe distribution.
+
+
+### Variables with variance close to zero
+
+Predictors that contain a single value (zero-variance) should not be included in the model since they do not provide information
+
+```{r}
+
+training %>% select(roll_belt, pitch_belt, yaw_belt, total_accel_belt, gyros_belt_x,
+gyros_belt_y, gyros_belt_z, accel_belt_x, accel_belt_y, accel_belt_z, magnet_belt_x,
+magnet_belt_y, magnet_belt_z, roll_arm, pitch_arm, yaw_arm, total_accel_arm, gyros_arm_x,
+gyros_arm_y, gyros_arm_z, accel_arm_x, accel_arm_y, accel_arm_z, magnet_arm_x, 
+magnet_arm_y, magnet_arm_z, roll_dumbbell, pitch_dumbbell, yaw_dumbbell, total_accel_dumbbell, 
+gyros_dumbbell_x, gyros_dumbbell_y, gyros_dumbbell_z, accel_dumbbell_x, accel_dumbbell_y, 
+accel_dumbbell_z, magnet_dumbbell_x, magnet_dumbbell_y, magnet_dumbbell_z, roll_forearm,
+pitch_forearm, yaw_forearm, total_accel_forearm, gyros_forearm_x, gyros_forearm_y, 
+gyros_forearm_z, accel_forearm_x, accel_forearm_y, accel_forearm_z, magnet_forearm_x, 
+magnet_forearm_y, magnet_forearm_z, classe) %>%
+nearZeroVar(saveMetrics = TRUE)
+
+```
+
+Among the predictors included in the model, none is detected with zero or near zero variance.
+
+## Division of data in training and test
+
+```{r}
+
+train <- createDataPartition(y = training$classe, p = 0.8, list = FALSE, times = 1)
+data_train <- training[train, ]
+data_test  <- training[-train, ]
+
+```
+
+## Predictors selection 
+
+The wrapper methods evaluate multiple models, generated by the incorporation or elimination of predictors, in order to identify the optimal combination that maximizes the capacity of the model.
+
+```{r}
+
+library(doMC)
+registerDoMC(cores = 4)
+
+partitions = 10
+repetitions = 5
+
+set.seed(123)
+seeds <- sample.int(1000, partitions * repetitions + 1)
+```
+
+#### Filter control
+
+```{r}
+
+ctrl_filtrado <- sbfControl(functions = rfSBF, method = "repeatedcv",
+                            number = partitions, repeats = repetitions,
+                            seeds = seeds, verbose = FALSE, 
+                            saveDetails = TRUE, allowParallel = TRUE)
+set.seed(234)
+
+rf_sbf <- sbf(classe ~ ., data = data_train,
+              sbfControl = ctrl_filtrado,
+               ntree = 500)
+
+rf_sbf
+rf_sbf$optVariables
+
+predictors_filtered <- rf_sbf$optVariables
+
+```
+
+### Selection of the best predictors
+
+```{r}
+
+data_train_proce<- select(data_train,predictors_filtered,classe) 
+data_test_proce<- select(data_test,predictors_filtered,classe) 
+
+```
+
+## Training of different models
+
+In the following sections different machine learning models are trained in order to compare them and identify the best result obtained
+
+
+### K-Nearest Neighbor (kNN)
+
+```{r}
+
+knn_model <- train(classe ~ ., data = data_train_proce,
+                    method = "knn",
+                    metric = "Accuracy")
+
+```
+
+### Naive Bayes
+
+```{r}
+
+nb_model <- train(classe ~ ., data = data_train_proce,
+                   method = "nb",
+                   metric = "Accuracy")
+
+```
+
+###  Análisis discriminante lineal (LDA)
+
+```{r}
+
+lda_model <- train(classe ~ ., data = data_train_proce,
+                    method = "lda",
+                    metric = "Accuracy")
+
+```
+
+### C5.0 Decision Trees and Rule-Based Model
+
+```{r}
+
+C50Tree_model <- train(classe ~ ., data = data_train_proce,
+                    method = "C5.0Tree",
+                    metric = "Accuracy")
+
+```
+
+### RandomForest
+
+```{r}
+
+rf_model <- train(classe ~ ., data = data_train_proce,
+                   method = "ranger",
+                   metric = "Accuracy",
+                   num.trees = 500)
+
+```
+
+                                                                  
+## Model comparison, Validation metrics
+
+Once different models have been trained and optimized, one must identify which of them achieves the best results for the problem, in this case, predict the classe of each patient.
+
+```{r}
+
+models <- list(KNN = knn_model, NB = nb_model, LDA = lda_model, 
+                tree = C50Tree_model, rf = rf_model)
+
+outcome_resamples <- resamples(models)
+outcome_resamples$values %>% head(10)
+
+```
+
+The data frame returned by resamples () is transformed to separate the name of the model and the metrics in different columns
+
+```{r}
+
+metrics_resamples <- outcome_resamples$values %>%
+                         gather(key = "model", value = "valor", -Resample) %>%
+                         separate(col = "model", into = c("model", "metric"),
+                                  sep = "~", remove = TRUE)
+metrics_resamples %>% head()
+
+```
+
+## Average Accuracy and Kappa of each model
+
+```{r}
+
+  metrics_resamples %>%
+  group_by(model, metric) %>% 
+  summarise(media = mean(valor)) %>% 
+  spread(key = metric, value = media) %>%
+  arrange(desc(Accuracy))
+```
+
+#### Validación: Accuracy medio repeated-CV
+
+
+```{r}
+
+metrics_resamples %>%
+  filter(metric == "Accuracy") %>%
+  group_by(model) %>% 
+  summarise(media = mean(valor)) %>%
+  ggplot(aes(x = reorder(model, media), y = media, label = round(media, 2))) +
+    geom_segment(aes(x = reorder(model, media), y = 0,
+                     xend = model, yend = media),
+                     color = "grey50") +
+    geom_point(size = 7, color = "firebrick") +
+    geom_text(color = "white", size = 2.5) +
+    scale_y_continuous(limits = c(0, 1)) +
+    geom_hline(yintercept = 0.62, linetype = "dashed") +
+    annotate(geom = "text", y = 0.72, x = 8.5, label = "Basal accuracy") +
+    labs(title = "Validación: Accuracy medio repeated-CV",
+         subtitle = "Models ordered by media",
+         x = "model") +
+    coord_flip() +
+    theme_bw()
+
+```
+
+## Test error
+
+``` {r}
+
+predictions <- extractPrediction(
+                  models = models,
+                  testX = data_test_proce[,-46],
+                  testY = data_test_proce$classe
+                  )
+predictions %>% head()
+
+```
+
+## Comparison of the prediction results between models and the differences between the training and test set.
+
+```{r}
+
+metrics_predictions <- predictions %>%
+                         mutate(acierto = ifelse(obs == pred, TRUE, FALSE)) %>%
+                         group_by(object, dataType) %>%
+                         summarise(accuracy = mean(acierto))
+
+metrics_predictions %>%
+  spread(key = dataType, value = accuracy) %>%
+  arrange(desc(Test))
+
+```
+
+### Graphic which shows the Comparison of the prediction results between each model.
+
+```{r}
+
+ggplot(data = metrics_predictions,
+       aes(x = reorder(object, accuracy), y = accuracy,
+           color = dataType, label = round(accuracy, 2))) +
+  geom_point(size = 8) +
+  scale_color_manual(values = c("orangered2", "gray50")) +
+  geom_text(color = "white", size = 3) +
+  scale_y_continuous(limits = c(0, 1)) +
+  geom_hline(yintercept = 0.62, linetype = "dashed") +
+  
+  annotate(geom = "text", y = 0.66, x = 8.5, label = "Basal Accuracy") +
+  coord_flip() +
+  labs(title = "Accuracy of training and test data", 
+       x = "model") +
+  theme_bw() + 
+  theme(legend.position = "bottom")
+
+```
+
+It can be seen that, all the models, get more correct predictions in the training set than in the test set. The random forest model achieves the highest test accuracy.
+
+
+## Conclusion
+
+The model based on random forest is the one that obtains the best results (according to the accuracy metric)
+
+
+
